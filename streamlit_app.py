@@ -95,6 +95,8 @@ def primero(item: dict, *claves):
 def credito_apify():
     try:
         lim = ApifyClient(st.secrets["APIFY_TOKEN"]).user("me").limits()
+        if not isinstance(lim, dict):
+            lim = lim.model_dump(by_alias=True)
         usado = lim["current"]["monthlyUsageUsd"]
         maximo = lim["limits"]["maxMonthlyUsageUsd"]
         return f"${usado:.2f} / ${maximo:.2f}"
@@ -112,13 +114,17 @@ def buscar_vacantes(puesto, ubicacion, fecha, modo, limite) -> pd.DataFrame:
 
     client = ApifyClient(st.secrets["APIFY_TOKEN"])
     run = client.actor(ACTOR_ID).call(
-        run_input={"urls": [url], "limitPerSource": limite, "count": limite}, timeout_secs=300
+        run_input={"urls": [url], "limitPerSource": limite, "count": limite}
     )
     if run is None:
         raise RuntimeError("Apify no devolvió resultados.")
+    # Compatible con apify-client 1.x (dict) y 2.x (objeto)
+    dataset_id = run["defaultDatasetId"] if isinstance(run, dict) else run.default_dataset_id
 
     filas = []
-    for it in client.dataset(run["defaultDatasetId"]).iterate_items():
+    for it in client.dataset(dataset_id).iterate_items():
+        if not isinstance(it, dict):
+            it = dict(it)
         link = primero(it, "link", "jobUrl", "url", "applyUrl")
         modo_raw = str(primero(it, "workplaceType", "workType", "workRemoteAllowed")).lower()
         filas.append({
