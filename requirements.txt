@@ -2,4 +2,3 @@ streamlit>=1.40
 st-gsheets-connection
 apify-client
 pandas
-altair
