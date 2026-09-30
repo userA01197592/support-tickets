@@ -1,5 +1,7 @@
 import datetime
 import html
+import re
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 import pandas as pd
@@ -82,6 +84,22 @@ MODALIDADES = {"Todas": "", "Presencial": "1", "Remoto": "2", "Híbrido": "3"}
 MAPA_MODO = {"on-site": "Presencial", "onsite": "Presencial", "remote": "Remoto", "hybrid": "Híbrido"}
 
 
+def clave(vid, link="") -> str:
+    """ID normalizado de la vacante. Google Sheets convierte los IDs en número
+    (4012345678 -> 4012345678.0), así que se limpian para que siempre coincidan."""
+    s = str(vid).strip()
+    if re.fullmatch(r"[0-9.eE+]+", s or "x"):
+        try:
+            s = str(int(Decimal(s)))
+        except (InvalidOperation, ValueError):
+            pass
+    if not s.isdigit():
+        m = re.search(r"(\d{8,})", str(link)) or re.search(r"(\d{8,})", s)
+        if m:
+            s = m.group(1)
+    return s
+
+
 def primero(item: dict, *claves):
     for c in claves:
         v = item.get(c)
@@ -127,7 +145,7 @@ def buscar_vacantes(puesto, ubicacion, fecha, modo, limite) -> pd.DataFrame:
         link = primero(it, "link", "jobUrl", "url", "applyUrl")
         modo_raw = str(primero(it, "workplaceType", "workType", "workRemoteAllowed")).lower()
         filas.append({
-            "ID": str(primero(it, "id", "jobId") or link),
+            "ID": clave(primero(it, "id", "jobId"), link),
             "Puesto": primero(it, "title", "jobTitle", "position"),
             "Empresa": primero(it, "companyName", "company"),
             "Ubicación": primero(it, "location", "jobLocation"),
@@ -160,7 +178,9 @@ def cargar_vacantes() -> pd.DataFrame:
     for c in COLS:
         if c not in df.columns:
             df[c] = ""
-    return df[COLS].fillna("").astype(str)
+    df = df[COLS].fillna("").astype(str)
+    df["ID"] = [clave(i, l) for i, l in zip(df["ID"], df["Link"])]
+    return df
 
 
 def guardar_vacantes(df: pd.DataFrame) -> None:
