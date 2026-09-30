@@ -2,7 +2,6 @@ import datetime
 import html
 from urllib.parse import urlencode
 
-import altair as alt
 import pandas as pd
 import streamlit as st
 from apify_client import ApifyClient
@@ -24,7 +23,7 @@ st.markdown(
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 html, body, .stApp, .stMarkdown, button, input, textarea, select {{ font-family: 'IBM Plex Sans', 'Helvetica Neue', sans-serif; }}
-.block-container {{ padding-top: 1.2rem; max-width: 1320px; }}
+.block-container {{ padding-top: 4rem; max-width: 1320px; }}
 h1, h2, h3 {{ font-family: 'Instrument Serif', Georgia, serif !important; font-weight: 400 !important; letter-spacing: -0.5px; }}
 .stButton > button, .stLinkButton > a, .stFormSubmitButton > button {{ border-radius: 8px; min-height: 44px; font-weight: 600; }}
 .kicker {{ font-family: 'IBM Plex Mono', monospace; font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: #B4491A; }}
@@ -99,7 +98,7 @@ def credito_apify():
             lim = lim.model_dump(by_alias=True)
         usado = lim["current"]["monthlyUsageUsd"]
         maximo = lim["limits"]["maxMonthlyUsageUsd"]
-        return f"${usado:.2f} / ${maximo:.2f}"
+        return f"{usado:.2f} / {maximo:.2f} créditos"
     except Exception:
         return None
 
@@ -186,9 +185,7 @@ if "APIFY_TOKEN" not in st.secrets:
     st.stop()
 
 guardadas = cargar_vacantes()
-tab_buscar, tab_mis, tab_tickets = st.tabs(
-    [":material/search: Buscar", ":material/view_kanban: Mis vacantes", ":material/confirmation_number: Tickets"]
-)
+tab_buscar, tab_mis = st.tabs([":material/search: Buscar", ":material/view_kanban: Mis vacantes"])
 
 # ===========================================================================
 # PESTAÑA: BUSCAR
@@ -200,12 +197,17 @@ with tab_buscar:
     with st.form("busqueda", border=True):
         c1, c2, c3, c4, c5 = st.columns([2.2, 1.6, 1.2, 1.2, 1], vertical_alignment="bottom")
         puesto = c1.text_input("Puesto o palabras clave", placeholder="supply chain planner")
-        ubicacion = c2.text_input("Ubicación", value="Monterrey, N.L.")
+        ubicacion = c2.text_input(
+            "Ubicación", value="Monterrey, Nuevo León, México",
+            placeholder="Municipio, Estado, País",
+            help="Formato recomendado: Municipio, Estado, País. Ej.: 'Monterrey, Nuevo León, México' "
+                 "o 'San Pedro Garza García, Nuevo León, México'. Para todo el país escribe solo 'México'.",
+        )
         fecha = c3.selectbox("Publicadas en", list(FECHAS))
         modo = c4.selectbox("Modalidad", list(MODALIDADES))
         limite = c5.number_input("Máximo", 10, 100, 25, step=5)
         buscar = st.form_submit_button("Buscar", type="primary", icon=":material/search:")
-        st.markdown(f'<span class="mono">Costo estimado: hasta ${limite * 0.002:.2f} USD por búsqueda</span>',
+        st.markdown(f'<span class="mono">Costo estimado: hasta {limite * 0.002:.2f} créditos por búsqueda</span>',
                     unsafe_allow_html=True)
 
     if buscar:
@@ -227,7 +229,10 @@ with tab_buscar:
         filtros, lista = st.columns([1.1, 4.5], gap="large")
         with filtros:
             st.markdown("**Mostrar**")
-            ocultar = st.checkbox("Ocultar ya guardadas")
+            ocultar = st.checkbox(
+                "Ocultar ya guardadas",
+                help="Quita de estos resultados las vacantes que ya están en Mis vacantes. No borra nada.",
+            )
             modos_presentes = sorted(m for m in res["Modalidad"].unique() if m)
             filtro_modo = st.radio("Modalidad", ["Todas"] + modos_presentes) if len(modos_presentes) > 1 else "Todas"
 
@@ -322,6 +327,17 @@ def detalle(vid: str):
         if r["Link"]:
             st.link_button("Ver en LinkedIn", r["Link"], icon=":material/open_in_new:", use_container_width=True)
 
+        st.divider()
+        with st.expander("Eliminar de Mis vacantes", icon=":material/delete:"):
+            st.caption("Se borra de tu Google Sheet y no se puede deshacer. "
+                       "Si solo no te interesa, mejor márcala como **Descartada**: así la app la reconoce "
+                       "si vuelve a salir en una búsqueda.")
+            confirmar = st.checkbox("Sí, quiero eliminarla", key=f"conf_{vid}")
+            if st.button("Eliminar definitivamente", disabled=not confirmar, use_container_width=True):
+                guardar_vacantes(df[df["ID"] != vid])
+                st.session_state.mensaje = "Vacante eliminada"
+                st.rerun()
+
 
 with tab_mis:
     st.markdown('<div class="kicker">Seguimiento · sincronizado con Google Sheets</div><div class="titulo">Mis vacantes</div>',
@@ -349,74 +365,3 @@ with tab_mis:
                     )
                     if st.button("Ver detalle", key=f"det_{r['ID']}", use_container_width=True):
                         detalle(r["ID"])
-
-
-# ===========================================================================
-# PESTAÑA: TICKETS (igual que antes)
-# ===========================================================================
-T_HOJA = "Tickets"
-T_COLS = ["ID", "Descripción", "Estado", "Prioridad", "Fecha"]
-T_ESTADOS = ["Abierto", "En progreso", "Cerrado"]
-T_PRIOR = ["Alta", "Media", "Baja"]
-
-
-def cargar_tickets() -> pd.DataFrame:
-    df = conn.read(worksheet=T_HOJA, ttl=0).dropna(how="all")
-    for c in T_COLS:
-        if c not in df.columns:
-            df[c] = None
-    df = df[T_COLS].copy()
-    df["ID"] = df["ID"].astype(str)
-    df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce").dt.date
-    return df
-
-
-def guardar_tickets(df: pd.DataFrame) -> None:
-    out = df.copy()
-    out["Fecha"] = pd.to_datetime(out["Fecha"]).dt.strftime("%Y-%m-%d")
-    conn.update(worksheet=T_HOJA, data=out)
-
-
-with tab_tickets:
-    st.markdown('<div class="titulo">Tickets de soporte</div>', unsafe_allow_html=True)
-    tdf = cargar_tickets()
-
-    with st.form("nuevo_ticket", clear_on_submit=True):
-        desc = st.text_area("Describe el problema")
-        prio = st.selectbox("Prioridad", T_PRIOR)
-        if st.form_submit_button("Enviar", type="primary"):
-            if desc.strip():
-                nums = pd.to_numeric(tdf["ID"].str.split("-").str[-1], errors="coerce").dropna()
-                nid = f"TICKET-{(int(nums.max()) if not nums.empty else 1000) + 1}"
-                nuevo = pd.DataFrame([{"ID": nid, "Descripción": desc.strip(), "Estado": "Abierto",
-                                       "Prioridad": prio, "Fecha": datetime.date.today()}])
-                guardar_tickets(pd.concat([nuevo, tdf], ignore_index=True))
-                st.session_state.mensaje = f"Ticket {nid} guardado"
-                st.rerun()
-            else:
-                st.warning("Escribe una descripción antes de enviar.")
-
-    editado = st.data_editor(
-        tdf, use_container_width=True, hide_index=True, key="editor_tickets",
-        column_config={
-            "Estado": st.column_config.SelectboxColumn("Estado", options=T_ESTADOS, required=True),
-            "Prioridad": st.column_config.SelectboxColumn("Prioridad", options=T_PRIOR, required=True),
-            "Fecha": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD"),
-        },
-        disabled=["ID", "Fecha"],
-    )
-    if st.button("Guardar cambios", type="primary", disabled=editado.equals(tdf), key="guardar_tickets"):
-        guardar_tickets(editado)
-        st.session_state.mensaje = "Cambios guardados"
-        st.rerun()
-
-    if not editado.empty:
-        g = editado.copy()
-        g["Fecha"] = pd.to_datetime(g["Fecha"])
-        st.altair_chart(
-            alt.Chart(g).mark_bar().encode(
-                x=alt.X("yearmonth(Fecha):O", title="Mes"), y=alt.Y("count():Q", title="Tickets"),
-                xOffset="Estado:N", color=alt.Color("Estado:N", sort=T_ESTADOS),
-            ).configure_legend(orient="bottom"),
-            use_container_width=True,
-        )
